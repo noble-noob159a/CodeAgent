@@ -18,18 +18,25 @@ from chromadb.utils import embedding_functions
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 DB_PATH = os.path.join(os.getcwd(), "chroma_db")
-chroma_client = chromadb.PersistentClient(path=DB_PATH)
-embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-collection = chroma_client.get_or_create_collection(
-    name="local_documents", 
-    embedding_function=embedding_func
-)
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=600, 
     chunk_overlap=60
 )
+collection = None
+
+
+def get_collection():
+    global collection
+    if collection is None:
+        chroma_client = chromadb.PersistentClient(path=DB_PATH)
+        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        collection = chroma_client.get_or_create_collection(
+            name="local_documents",
+            embedding_function=embedding_func
+        )
+    return collection
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
@@ -183,7 +190,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             ids = [f"{os.path.basename(file_path)}_chunk_{i}" for i in range(len(chunks))]
             metadatas = [{"source": file_path, "chunk_index": i} for i in range(len(chunks))]
             
-            collection.upsert(
+            local_collection = get_collection()
+            local_collection.upsert(
                 ids=ids,
                 documents=chunks,
                 metadatas=metadatas
@@ -201,7 +209,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
         top_k = int(arguments.get("top_k", 3))
         
         try:
-            results = collection.query(
+            local_collection = get_collection()
+            results = local_collection.query(
                 query_texts=[query],
                 n_results=top_k
             )

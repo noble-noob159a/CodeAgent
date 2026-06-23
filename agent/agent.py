@@ -10,11 +10,13 @@ from mcp.client.stdio import stdio_client
 
 
 load_dotenv()
-PROXY_URL =  os.environ.get("HTTP_PROXY")
+PROXY_URL =  os.environ.get("HTTP_PROXY") or None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_PATH = os.path.join(BASE_DIR, "server.py")
 # print(PROXY_URL)
 openai_client = OpenAI(
     base_url="https://models.inference.ai.azure.com",
-    api_key=os.environ.get("GITHUB_TOKEN"),
+    api_key=os.environ.get("API_TOKEN"),
     http_client=httpx.Client(proxy=PROXY_URL) if PROXY_URL else None
 )
 
@@ -26,7 +28,7 @@ async def run_mcp_agent():
     # Run mcp server
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["server.py"],
+        args=[SERVER_PATH],
         env=os.environ.copy()
     )
 
@@ -58,7 +60,7 @@ async def run_mcp_agent():
             messages = [{"role": "system", "content": "You are a senior coding assistant. Use your available tools to manage files."}]
            
             print("====================================================")
-            print("🤖 MCP-Enabled Agent Ready!")
+            print("MCP-Enabled Agent Ready!")
             print("Type 'exit' to quit.")
             print("====================================================")
 
@@ -87,13 +89,13 @@ async def run_mcp_agent():
 
                 # Process Tool calls requested by the Cloud LLM via local MCP Server
                 if response_message.tool_calls:
-                    print("\n⚙️  [Executing MCP Server Action...]")
+                    print("\n->  [Executing MCP Server Action...]")
                    
                     for tool_call in response_message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args = json.loads(tool_call.function.arguments)
                        
-                        print(f"👉 Dispatching to MCP: {tool_name}({tool_args})")
+                        print(f"-> Dispatching to MCP: {tool_name}({tool_args})")
                        
                         # Execute tool on the local MCP server session
                         mcp_result = await mcp_session.call_tool(tool_name, arguments=tool_args)
@@ -116,9 +118,9 @@ async def run_mcp_agent():
                     )
                     final_reply = follow_up_response.choices[0].message.content
                     messages.append({"role": "assistant", "content": final_reply})
-                    print(f"\n🤖 Agent:\n{final_reply}")
+                    print(f"\n Agent:\n{final_reply}")
                 else:
-                    print(f"\n🤖 Agent:\n{response_message.content}")
+                    print(f"\n Agent:\n{response_message.content}")
 
 
 
