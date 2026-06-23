@@ -12,6 +12,24 @@ server = Server("workspace-server")
 load_dotenv()
 PROXY_URL = os.environ.get("HTTP_PROXY") or None
 
+import pypdf
+import chromadb
+from chromadb.utils import embedding_functions
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+DB_PATH = os.path.join(os.getcwd(), "chroma_db")
+chroma_client = chromadb.PersistentClient(path=DB_PATH)
+embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2"
+)
+collection = chroma_client.get_or_create_collection(
+    name="local_documents", 
+    embedding_function=embedding_func
+)
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=600, 
+    chunk_overlap=60
+)
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
@@ -47,7 +65,30 @@ async def handle_list_tools() -> list[types.Tool]:
                 },
                 "required": ["query"],
             },
-        )
+        ),
+        types.Tool(
+            name="index_document",
+            description="Reads a local text file, splits it into semantic chunks, and adds it to the RAG vector database.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Relative or absolute path to the local text file."}
+                },
+                "required": ["file_path"],
+            },
+        ),
+        types.Tool(
+            name="search_knowledge_base",
+            description="Searches the local RAG vector database for text snippets relevant to the query.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search term or question to query the database with."},
+                    "top_k": {"type": "integer", "description": "Number of relevant chunks to retrieve.", "default": 3}
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -55,7 +96,6 @@ async def handle_list_tools() -> list[types.Tool]:
 async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
     if not arguments:
         raise ValueError("Missing tool arguments")
-
 
     if name == "read_file":
         path = arguments.get("path")
@@ -112,28 +152,76 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
 
 
             output = "\n".join(results[:5])
-            return [types.TextContent(type="text", text=output)]  
-       
-            # with DDGS(proxies=proxies, timeout=10) as ddgs:
-            #     # Fetch text results
-            #     raw_results = ddgs.text(query, max_results=4)
-               
-            #     if not raw_results:
-            #         return [types.TextContent(type="text", text="Error: DuckDuckGo returned an empty response. Your proxy or IP might be rate-limited.")]
-               
-            #     results = []
-            #     for item in raw_results:
-            #         title = item.get("title", "No Title")
-            #         snippet = item.get("body", "No Snippet")
-            #         link = item.get("href", "")
-            #         results.append(f"Title: {title}\nLink: {link}\nSnippet: {snippet}\n---")
-               
-            #     output = "\n".join(results)
-            #     return [types.TextContent(type="text", text=output)]
+            return [types.TextContent(type="text", text=output)]
                        
         except Exception as e:
             return [types.TextContent(type="text", text=f"Search failed: {str(e)}")]
 
+
+    elif name == "index_document":
+        file_path = arguments.get("file_path")
+        if not os.path.exists(file_path):
+            return [types.TextContent(type="text", text=f"Error: File not found at {file_path}")]
+        
+        try:
+            content = ""
+            if file_path.lower().endswith(".pdf"):
+                with open(file_path, "rb") as f:
+                    pdf_reader = pypdf.PdfReader(f)
+                    for page_num, page in enumerate(pdf_reader.pages):
+                        text = page.extract_text()
+                        if text:
+                            content += f"\n[Page {page_num + 1}]\n{text}\n"
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            
+            if not content.strip():
+                return [types.TextContent(type="text", text=f"Error: No readable text could be extracted from {file_path}")]
+            
+            chunks = text_splitter.split_text(content)
+            ids = [f"{os.path.basename(file_path)}_chunk_{i}" for i in range(len(chunks))]
+            metadatas = [{"source": file_path, "chunk_index": i} for i in range(len(chunks))]
+            
+            collection.upsert(
+                ids=ids,
+                documents=chunks,
+                metadatas=metadatas
+            )
+            
+            output_msg = f"Successfully indexed '{file_path}'. Split into {len(chunks)} chunks and stored in the vector database."
+            return [types.TextContent(type="text", text=output_msg)]
+            
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Indexing failed: {str(e)}")]
+
+
+    elif name == "search_knowledge_base":
+        query = arguments.get("query")
+        top_k = int(arguments.get("top_k", 3))
+        
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=top_k
+            )
+            
+            output_lines = []
+            documents = results.get("documents", [[]])[0]
+            metadatas = results.get("metadatas", [[]])[0]
+            
+            if not documents:
+                return [types.TextContent(type="text", text="No relevant context found in the knowledge base.")]
+                
+            for idx, doc in enumerate(documents):
+                source = metadatas[idx].get("source", "Unknown")
+                output_lines.append(f"--- Context Snippet {idx+1} (Source: {source}) ---\n{doc}\n")
+                
+            final_context = "\n".join(output_lines)
+            return [types.TextContent(type="text", text=final_context)]
+            
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Search failed: {str(e)}")]
 
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -146,7 +234,7 @@ async def main():
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="cv-workspace-server",
+                server_name="workspace-server",
                 server_version="1.0.0",
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),

@@ -4,3 +4,7 @@ httpx
 requests
 beautifulsoup4
 python-dotenv
+pypdf
+chromadb
+sentence-transformers
+langchain-text-splitters
