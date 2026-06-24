@@ -24,6 +24,18 @@ openai_client = OpenAI(
 MODEL_NAME = "gpt-4.1-mini"
 
 
+def format_skill_catalog(skill_payload: str) -> str:
+    catalog = skill_payload.strip()
+    if not catalog:
+        return "No markdown skills are available."
+
+    return (
+        f"{catalog}\n\n"
+        "When a user request matches a skill, call `read_skill` to load the full markdown "
+        "for only that skill before applying its workflow. Then strictly follow the instructions in the skill markdown to complete the task. "
+    )
+
+
 async def run_mcp_agent():
     # Run mcp server
     server_params = StdioServerParameters(
@@ -55,9 +67,22 @@ async def run_mcp_agent():
                     }
                 })
 
+            skill_catalog_response = await mcp_session.call_tool("list_skills", arguments={})
+            skill_catalog_text = (
+                skill_catalog_response.content[0].text
+                if skill_catalog_response.content
+                else "No markdown skills are available."
+            )
+            skill_catalog = format_skill_catalog(skill_catalog_text)
 
             # System baseline prompt
-            messages = [{"role": "system", "content": "You are a senior coding assistant. Use your available tools to manage files."}]
+            messages = [{
+                "role": "system",
+                "content": (
+                    "You are a AI researcher assistant. Use your available tools and skills to assist with research tasks.\n\n"
+                    f"{skill_catalog}"
+                ),
+            }]
            
             print("====================================================")
             print("MCP-Enabled Agent Ready!")
@@ -114,7 +139,8 @@ async def run_mcp_agent():
                     # Request final response after tool execution output is attached
                     follow_up_response = openai_client.chat.completions.create(
                         model=MODEL_NAME,
-                        messages=messages
+                        messages=messages,
+                        tools=openai_tools,
                     )
                     final_reply = follow_up_response.choices[0].message.content
                     messages.append({"role": "assistant", "content": final_reply})

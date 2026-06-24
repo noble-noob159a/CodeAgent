@@ -92,7 +92,7 @@ The interactive client. It:
 
 The local MCP server. It defines and executes the tools exposed to the agent:
 
-- `read_file`: reads text from a local file.
+- `read_file`: reads text from a local file, including extractable text from PDFs.
 - `write_file`: writes text to a local file.
 - `web_search`: performs a simple web search through DuckDuckGo HTML results.
 - `index_document`: reads a text or PDF file, splits it into chunks, and stores it in ChromaDB.
