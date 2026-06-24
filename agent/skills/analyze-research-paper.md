@@ -18,15 +18,19 @@ Use this skill when the user:
 - wants limitations, assumptions, or future work extracted
 
 ## Workflow
-1. Identify the paper title, domain, and task.
-2. Extract the problem statement and main contribution.
-3. Summarize the method:
+1. If the paper is a PDF, read it in page chunks with `read_file` instead of loading the full file at once.
+2. Start with the first 2-3 pages to capture the title, abstract, and introduction.
+3. Read later page ranges as needed for method, experiments, and results.
+4. Keep each tool response small enough to fit comfortably in the context window.
+5. Identify the paper title, domain, and task.
+6. Extract the problem statement and main contribution.
+7. Summarize the method:
    - input/output
    - architecture or algorithm
    - training/evaluation setup
-4. Extract results and compare against baselines if present.
-5. List limitations, assumptions, and open questions.
-6. Produce the answer in the format requested by the user.
+8. Extract results and compare against baselines if present.
+9. List limitations, assumptions, and open questions.
+10. Produce the answer in the format requested by the user.
 
 ## Output format
 Prefer the following structure unless the user asks otherwise:
@@ -40,9 +44,10 @@ Prefer the following structure unless the user asks otherwise:
 
 ## Rules
 - Do not claim results that are not stated in the source.
-- Distinguish clearly between the paper’s claims and your interpretation.
+- Distinguish clearly between the paper's claims and your interpretation.
 - Preserve important technical terms, dataset names, and metrics.
 - If the paper is incomplete or unreadable, say what information is missing.
+- When reading a long PDF, continue in page ranges instead of asking for the whole document at once.
 
 ## Special cases
 ### Comparison requests

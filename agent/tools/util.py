@@ -55,6 +55,33 @@ def extract_pdf_text(path: str) -> str:
     return "\n\n".join(content)
 
 
+def extract_pdf_pages(path: str, start_page: int, end_page: int) -> str:
+    if start_page < 1:
+        raise ValueError("start_page must be greater than or equal to 1")
+    if end_page < start_page:
+        raise ValueError("end_page must be greater than or equal to start_page")
+
+    content: list[str] = []
+    with open(path, "rb") as file_handle:
+        pdf_reader = pypdf.PdfReader(file_handle)
+        max_page = min(end_page, len(pdf_reader.pages))
+        if start_page > len(pdf_reader.pages):
+            return ""
+
+        for page_number in range(start_page, max_page + 1):
+            page = pdf_reader.pages[page_number - 1]
+            text = page.extract_text()
+            if text:
+                content.append(f"[Page {page_number}]\n{text}")
+    return "\n\n".join(content)
+
+
+def count_pdf_pages(path: str) -> int:
+    with open(path, "rb") as file_handle:
+        pdf_reader = pypdf.PdfReader(file_handle)
+        return len(pdf_reader.pages)
+
+
 def read_local_file(path: str) -> str:
     if path.lower().endswith(".pdf"):
         content = extract_pdf_text(path)

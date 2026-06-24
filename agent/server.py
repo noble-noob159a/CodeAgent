@@ -21,8 +21,8 @@ server = Server("workspace-server")
 from agent.tools import get_tool_map, get_tool_specs
 
 
-tool_map = None  # Initialize tool_map to None
-tool_lists = None  # Initialize tool_lists to None
+tool_map = None
+tool_lists = None
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
@@ -31,10 +31,9 @@ async def handle_list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
-    if not arguments:
+    if arguments is None:
         raise ValueError("Missing tool arguments")
 
-    
     tool = tool_map.get(name)
     if tool is None:
         raise ValueError(f"Unknown tool: {name}")
