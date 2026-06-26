@@ -1,3 +1,9 @@
+---
+title: CodeAgent Web UI
+sdk: gradio
+app_file: app/app.py
+---
+
 # CodeAgent
 
 CodeAgent is a local MCP-enabled coding assistant. It runs a Python client that connects to a local MCP server over stdio, exposes local workspace tools to a chat model, and can optionally index/search local documents with ChromaDB.
@@ -75,6 +81,14 @@ Type 'exit' to quit.
 ```
 
 Type a prompt at `You:`. Type `exit` to stop the agent.
+
+### Deploy the web UI to Hugging Face Spaces
+
+The repository now includes a Gradio entry point at `app/app.py`.
+
+For Spaces, add your model API key as a secret and install the requirements from `requirements.txt`. The hosted UI supports provider selection, markdown chat output, text/PDF uploads, and a downloadable markdown response file.
+
+Local-only tools such as workspace file read/write and the RAG knowledge base remain disabled in the deployed UI.
 
 ## Key Components
 

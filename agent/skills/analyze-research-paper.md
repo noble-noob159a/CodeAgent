@@ -48,7 +48,7 @@ Prefer the following structure unless the user asks otherwise:
 - Preserve important technical terms, dataset names, and metrics.
 - If the paper is incomplete or unreadable, say what information is missing.
 - When reading a long PDF, continue in page ranges instead of asking for the whole document at once.
-
+- Write the ouput analyze to 'output/[PAPER_NAME]/md'.
 ## Special cases
 ### Comparison requests
 When comparing multiple papers:
@@ -63,8 +63,3 @@ For VLM / multimodal papers, explicitly identify:
 - fusion strategy
 - pretraining objective
 - downstream tasks
-
-## Additional resources
-- `references/review-checklist.md` for a detailed critique rubric
-- `references/common-ml-metrics.md` for metric interpretation
-- `examples/paper-summary-example.md` for output examples

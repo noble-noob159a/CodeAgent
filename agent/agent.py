@@ -1,12 +1,16 @@
 import os
 import sys
 import json
-import httpx
 import asyncio
-from openai import OpenAI
+import argparse
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+try:
+    from .router import build_model_route, ModelRoute
+except ImportError:
+    from router import build_model_route, ModelRoute
 
 
 load_dotenv()
@@ -17,15 +21,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
-# print(PROXY_URL)
-openai_client = OpenAI(
-    base_url="https://models.inference.ai.azure.com",
-    api_key=os.environ.get("API_TOKEN"),
-    http_client=httpx.Client(proxy=PROXY_URL) if PROXY_URL else None
-)
-
-
-MODEL_NAME = "gpt-4.1-mini"
 
 
 def format_skill_catalog(skill_payload: str) -> str:
@@ -40,14 +35,30 @@ def format_skill_catalog(skill_payload: str) -> str:
     )
 
 
-async def execute_llm_turn(messages: list[dict], openai_tools: list[dict], mcp_session: ClientSession) -> str:
-    max_rounds = 8
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the MCP-enabled coding agent.")
+    parser.add_argument(
+        "--provider",
+        required=False,
+        default='glm',
+        help="Provider to use: github, openai, gemini, or glm. Optional when using a known model alias.",
+    )
+    return parser.parse_args()
+
+
+async def execute_llm_turn(
+    messages: list[dict],
+    tools: list[dict],
+    mcp_session: ClientSession,
+    model_route: ModelRoute,
+) -> str:
+    max_rounds = 15
 
     for _ in range(max_rounds):
-        response = openai_client.chat.completions.create(
-            model=MODEL_NAME,
+        response = model_route.client.chat.completions.create(
+            model=model_route.model,
             messages=messages,
-            tools=openai_tools,
+            tools=tools,
             tool_choice="auto",
         )
 
@@ -82,7 +93,7 @@ async def execute_llm_turn(messages: list[dict], openai_tools: list[dict], mcp_s
     return "The model did not produce a final answer."
 
 
-async def run_mcp_agent():
+async def run_mcp_agent(model_route: ModelRoute):
     # Run mcp server
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -102,9 +113,9 @@ async def run_mcp_agent():
             mcp_tools = mcp_tools_response.tools
 
 
-            openai_tools = []
+            tools = []
             for tool in mcp_tools:
-                openai_tools.append({
+                tools.append({
                     "type": "function",
                     "function": {
                         "name": tool.name,
@@ -132,6 +143,7 @@ async def run_mcp_agent():
            
             print("====================================================")
             print("MCP-Enabled Agent Ready!")
+            print(f"Model: {model_route.provider}/{model_route.model}")
             print("Type 'exit' to quit.")
             print("====================================================")
 
@@ -144,13 +156,18 @@ async def run_mcp_agent():
 
                 messages.append({"role": "user", "content": user_input})
 
-                final_reply = await execute_llm_turn(messages, openai_tools, mcp_session)
+                final_reply = await execute_llm_turn(messages, tools, mcp_session, model_route)
                 messages.append({"role": "assistant", "content": final_reply})
-                print(f"\n Agent:\n{final_reply}")
+                print(f"\n🤖 Agent:\n{final_reply}")
 
 
 
 
 if __name__ == "__main__":
-    asyncio.run(run_mcp_agent())
+    args = parse_args()
+    route = build_model_route(
+        provider_name=args.provider,
+        proxy_url=PROXY_URL,
+    )
+    asyncio.run(run_mcp_agent(route))
 

@@ -5,7 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+.agents/
 # Distribution / packaging
 .Python
 build/
@@ -146,7 +146,7 @@ activemq-data/
 
 # SageMath parsed files
 *.sage.py
-
+output/
 # Environments
 .env
 .envrc
