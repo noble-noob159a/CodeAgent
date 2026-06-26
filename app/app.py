@@ -3,16 +3,28 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 import warnings
-
+import queue
+import threading
 warnings.filterwarnings("ignore")
 import gradio as gr
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+# Configure logging for tool monitoring
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -27,6 +39,8 @@ server_params = StdioServerParameters(
     args=[str(SERVER_PATH)],
     env=os.environ.copy(),
 )
+tools, skill_catalog = [], "No markdown skills are available."
+system_prompt = ""
 load_dotenv()
 
 PROXY_URL = os.environ.get("HTTP_PROXY") or None
@@ -49,6 +63,18 @@ def _supports_kwarg(callable_obj: object, kwarg_name: str) -> bool:
 
 CHATBOT_USES_MESSAGES = _supports_kwarg(gr.Chatbot, "type")
 
+def _run_async_gen_in_thread(agen_factory, result_queue: "queue.Queue"):
+    async def runner():
+        agen = agen_factory()
+        try:
+            async for event in agen:
+                result_queue.put(("event", event))
+        except Exception as exc:  # noqa: BLE001
+            result_queue.put(("error", exc))
+        finally:
+            result_queue.put(("done", None))
+
+    asyncio.run(runner())
 
 def _format_chatbot_history(history: list[dict[str, str]]) -> object:
     return history
@@ -64,13 +90,9 @@ def _tool_result_text(tool_result: object) -> str:
     return "\n".join(parts).strip()
 
 
-async def _load_tool_metadata() -> tuple[list[dict[str, object]], str]:
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=[str(SERVER_PATH)],
-        env=os.environ.copy(),
-    )
 
+async def _load_tool_metadata() -> tuple[list[dict[str, object]], str]:
+    logger.info("Loading MCP tool metadata...")
     async with stdio_client(server_params) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as mcp_session:
             await mcp_session.initialize()
@@ -94,6 +116,9 @@ async def _load_tool_metadata() -> tuple[list[dict[str, object]], str]:
             if not skill_catalog_text:
                 skill_catalog_text = "No markdown skills are available."
 
+            # logger.info(f"Loaded {len(tools)} tools from MCP server")
+            logger.debug(f"Tools: {[t['function']['name'] for t in tools]}")
+
             return tools, skill_catalog_text
 
 
@@ -102,7 +127,7 @@ async def _continue_workspace_turn(
     messages: list[dict[str, object]],
     tools: list[dict[str, object]],
     initial_tool_calls: list[object],
-) -> str:
+):  # no longer "-> str", it's an async generator now
     async with stdio_client(server_params) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as mcp_session:
             await mcp_session.initialize()
@@ -110,6 +135,7 @@ async def _continue_workspace_turn(
             for tool_call in initial_tool_calls:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments or "{}")
+                logger.info(f"Tool call: {tool_name} with args: {tool_args}")
                 tool_result = await mcp_session.call_tool(tool_name, arguments=tool_args)
                 result_text = _tool_result_text(tool_result)
                 messages.append(
@@ -120,15 +146,13 @@ async def _continue_workspace_turn(
                         "content": result_text or f"Tool {tool_name} returned no text.",
                     }
                 )
+                # NEW: announce these too, since they happen inside this function
+                yield {"type": "tool_call", "tool": tool_name, "args": tool_args}
 
             for _ in range(10):
                 response = route.client.chat.completions.create(
-                    model=route.model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
+                    model=route.model, messages=messages, tools=tools, tool_choice="auto",
                 )
-
                 response_message = response.choices[0].message
                 messages.append(response_message)
 
@@ -136,6 +160,7 @@ async def _continue_workspace_turn(
                     for tool_call in response_message.tool_calls:
                         tool_name = tool_call.function.name
                         tool_args = json.loads(tool_call.function.arguments or "{}")
+                        logger.info(f"Tool call: {tool_name} with args: {tool_args}")
                         tool_result = await mcp_session.call_tool(tool_name, arguments=tool_args)
                         result_text = _tool_result_text(tool_result)
                         messages.append(
@@ -146,24 +171,27 @@ async def _continue_workspace_turn(
                                 "content": result_text or f"Tool {tool_name} returned no text.",
                             }
                         )
+                        # NEW: yield every subsequent tool call, not just the first batch
+                        yield {"type": "tool_call", "tool": tool_name, "args": tool_args}
                     continue
 
-                return (response_message.content or "").strip() or "The model returned an empty response."
+                final_response = (response_message.content or "").strip() or "The model returned an empty response."
+                yield {"type": "final", "text": final_response}
+                return
 
-    return "The model did not produce a final answer."
+    yield {"type": "final", "text": "The model did not produce a final answer."}
 
-
-def build_system_prompt(provider: str, model: str, skill_catalog: str) -> str:
+def build_system_prompt() -> str:
     base_prompt = (
         "You are CodeAgent, a helpful assistant with access to a local MCP workspace server. "
-        "You can inspect and modify local files, read markdown skills, and search the local knowledge base. "
+        "You can inspect and modify local files, read markdown skills, web search, and search the local knowledge base. "
         "Use tools when the user asks about workspace files, code edits, file contents, or skill-based workflows. "
         "Keep answers concise, practical, and markdown-friendly."
     )
 
     capability_note = (
-        f"\n\nCurrent model route: {provider}/{model}. "
-        "When a request needs local context, use the available tools instead of pretending the capability is unavailable. "
+        f"\n\n"
+        "When a request needs local or new-updated context, use the available tools instead of pretending the capability is unavailable. "
         "If a skill matches the request, load it with read_skill and follow it strictly."
     )
 
@@ -207,6 +235,8 @@ with gr.Blocks(**blocks_kwargs) as demo:
     chatbot_kwargs = {"label": "Conversation", "height": 560, "show_label": False}
     if CHATBOT_USES_MESSAGES:
         chatbot_kwargs["type"] = "messages"
+    if _supports_kwarg(gr.Chatbot, "group_consecutive_messages"):
+        chatbot_kwargs["group_consecutive_messages"] = False
     chatbot = gr.Chatbot(**chatbot_kwargs, elem_id="chatbot")
 
     status_box = gr.Markdown("Ready. Send a message to start.", elem_id="status-box")
@@ -263,8 +293,8 @@ with gr.Blocks(**blocks_kwargs) as demo:
 
             provider_name = provider.split("/")[0]
             route = build_model_route(provider_name=provider_name, proxy_url=PROXY_URL)
-            tools, skill_catalog = asyncio.run(_load_tool_metadata())
-            system_prompt = build_system_prompt(provider, route.model, skill_catalog)
+            # tools, skill_catalog = asyncio.run(_load_tool_metadata())
+            # system_prompt = build_system_prompt(provider, route.model)
 
             messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
             messages.extend(current_history)
@@ -281,26 +311,47 @@ with gr.Blocks(**blocks_kwargs) as demo:
             messages.append(response_message)
 
             if response_message.tool_calls:
-                tool_names_used: list[str] = []
-                for tool_call in response_message.tool_calls:
-                    tool_name = tool_call.function.name
-                    if tool_name not in tool_names_used:
-                        tool_names_used.append(tool_name)
-
-                tool_list = ", ".join(tool_names_used) if tool_names_used else "workspace tools"
-                tool_history = current_history + [
-                    {"role": "user", "content": stripped_text},
-                    {
-                        "role": "assistant",
-                        "content": f"-> **Using tools**\n-> Connecting to local MCP server to use `{tool_list}`.",
-                    },
-                ]
-                yield tool_history, _format_chatbot_history(tool_history), "Model is using local workspace tools...", ""
-
-                assistant_text = asyncio.run(
-                    _continue_workspace_turn(route, messages, tools, list(response_message.tool_calls))
+                result_queue = queue.Queue()
+                worker = threading.Thread(
+                    target=_run_async_gen_in_thread,
+                    args=(
+                        lambda: _continue_workspace_turn(route, messages, tools, list(response_message.tool_calls)),
+                        result_queue,
+                    ),
+                    daemon=True,
                 )
-                final_history = tool_history + [{"role": "assistant", "content": assistant_text}]
+                worker.start()
+                running_history = updated_history
+                assistant_text = "The model did not produce a final answer."
+
+                while True:
+                    kind, payload = result_queue.get()  # blocks until the worker thread pushes something
+
+                    if kind == "event":
+                        if payload["type"] == "tool_call":
+                            running_history = running_history + [
+                                {
+                                    "role": "assistant",
+                                    "content": f"-> **Using tool**\n-> `{payload['tool']}({json.dumps(payload['args'])})`",
+                                }
+                            ]
+                            # running_history = running_history + [
+                            #     {
+                            #         "role": "assistant",
+                            #         "content": f"`{payload['tool']}({json.dumps(payload['args'])})`",
+                            #         "metadata": {"title": f"-> Using tool: {payload['tool']}"},
+                            #     }
+                            # ]
+                            yield running_history, _format_chatbot_history(running_history), "Model is using local workspace tools...", ""
+                        elif payload["type"] == "final":
+                            assistant_text = payload["text"]
+                    elif kind == "error":
+                        raise gr.Error(str(payload)) from payload
+                    elif kind == "done":
+                        break
+
+                worker.join()
+                final_history = running_history + [{"role": "assistant", "content": assistant_text}]
                 final_status = "Model used MCP tools and returned a markdown response."
             else:
                 assistant_text = (response_message.content or "").strip() or "The model returned an empty response."
@@ -334,5 +385,6 @@ if __name__ == "__main__":
         "server_port": int(os.environ.get("PORT", "7862")),
     }
     launch_kwargs.update(launch_extra_kwargs)
-
+    tools, skill_catalog = asyncio.run(_load_tool_metadata())
+    system_prompt = build_system_prompt()
     demo.queue().launch(**launch_kwargs)

@@ -1,20 +1,15 @@
----
-title: CodeAgent Web UI
-sdk: gradio
-app_file: app/app.py
----
-
 # CodeAgent
 
-CodeAgent is a local MCP-enabled coding assistant. It runs a Python client that connects to a local MCP server over stdio, exposes local workspace tools to a chat model, and can optionally index/search local documents with ChromaDB.
+CodeAgent is a local MCP-enabled coding assistant with both CLI and web interfaces. It connects to a local MCP server over stdio, exposes local workspace tools to a chat model, and supports document indexing with ChromaDB.
 
 ## Features
 
-- Local MCP server with file read/write tools.
-- Web search helper using DuckDuckGo HTML search.
-- Local document indexing for text and PDF files.
-- ChromaDB-backed knowledge base search.
-- Chat model integration through the GitHub Models-compatible OpenAI client.
+- **Interactive CLI Agent**: Run a conversational AI assistant with file operations, web search, and knowledge base access
+- **Web UI**: Gradio-based web interface with real-time tool monitoring and markdown output
+- **Multiple Model Providers**: GitHub Models, OpenAI, Gemini, and GLM support
+- **Local MCP Server**: File read/write, web search, and knowledge base tools
+- **Document Indexing**: Text and PDF indexing with semantic search using ChromaDB
+- **Skill System**: Reusable markdown-based workflows for common tasks
 
 ## Project Structure
 
@@ -22,13 +17,28 @@ CodeAgent is a local MCP-enabled coding assistant. It runs a Python client that 
 CodeAgent/
 |-- agent/
 |   |-- __init__.py
-|   |-- agent.py        # MCP client and interactive chat loop
-|   `-- server.py       # Local MCP server and tool implementations
+|   |-- agent.py        # Interactive CLI agent with MCP integration
+|   |-- router.py       # Model provider routing and OpenAI client
+|   |-- server.py       # Local MCP server and tool implementations
+|   |-- skills/         # Markdown skill definitions
+|   |   |-- analyze-research-paper.md
+|   |   |-- code-review.md
+|   |-- tools/          # MCP tool implementations
+|       |-- index_document.py
+|       |-- list_skills.py
+|       |-- read_file.py
+|       |-- read_skill.py
+|       |-- search_knowledge_base.py
+|       |-- util.py
+|       |-- web_search.py
+|       |-- write_file.py
+|-- app/                # Gradio web UI
+|   |-- app.py          # Web interface with tool monitoring
+|   `-- app.css         # Custom styling
 |-- chroma_db/          # Local ChromaDB persistence directory, ignored by git
 |-- local_docs/         # Suggested location for documents to index, ignored by git
-|-- index.html          # Static HTML file, if used for local UI experiments
+|-- output/             # Generated output files
 |-- requirements.txt    # Python dependencies
-|-- test.py             # Placeholder test file
 |-- .env                # Local environment variables, ignored by git
 |-- .gitignore
 `-- README.md
@@ -64,10 +74,19 @@ The RAG tools use `sentence-transformers`. The first call to `index_document` or
 Create a `.env` file in the project root:
 
 ```env
-API_TOKEN=your_github_models_token_here
+# Required for model providers
+GITHUB_API_KEY=your_github_token_here
+OPENAI_API_KEY=your_openai_token_here
+GEMINI_API_KEY=your_gemini_token_here
+GLM_API_KEY=your_glm_token_here
+
+# Optional: Proxy configuration
+HTTP_PROXY=http://proxy.example.com:8080
+DEFAULT_PROVIDER=glm/4.5-flash
+PORT=7862
 ```
 
-### 4. Run the agent
+### 4. Run the CLI agent
 
 ```powershell
 python agent\agent.py
@@ -76,66 +95,82 @@ python agent\agent.py
 When startup succeeds, you should see:
 
 ```text
+====================================================
 MCP-Enabled Agent Ready!
+Model: glm/4.5-flash
 Type 'exit' to quit.
+====================================================
+
+You: [your prompt]
 ```
 
 Type a prompt at `You:`. Type `exit` to stop the agent.
 
-### Deploy the web UI to Hugging Face Spaces
+### 5. Run the web UI
 
-The repository now includes a Gradio entry point at `app/app.py`.
+```powershell
+python app\app.py
+```
 
-For Spaces, add your model API key as a secret and install the requirements from `requirements.txt`. The hosted UI supports provider selection, markdown chat output, text/PDF uploads, and a downloadable markdown response file.
-
-Local-only tools such as workspace file read/write and the RAG knowledge base remain disabled in the deployed UI.
+The web UI will launch at `http://localhost:7862` (or the port specified in `.env`). You can select different model providers and monitor tool calls in real-time.
 
 ## Key Components
 
 ### `agent/agent.py`
 
-The interactive client. It:
+The interactive CLI agent. It:
 
-- Loads environment variables from `.env`.
-- Creates an OpenAI-compatible client pointed at GitHub Models.
-- Starts the local MCP server with Python stdio transport.
-- Lists MCP tools and converts them into OpenAI tool definitions.
-- Runs the chat loop and dispatches model-requested tool calls to the local MCP server.
+- Loads environment variables from `.env`
+- Creates an OpenAI-compatible client with provider routing
+- Starts the local MCP server with Python stdio transport
+- Lists MCP tools and converts them into OpenAI tool definitions
+- Runs the chat loop and dispatches model-requested tool calls
+- Supports skill-based workflows for common tasks
+
+### `agent/router.py`
+
+Model provider configuration and routing. It:
+
+- Supports multiple providers: GitHub, OpenAI, Gemini, GLM
+- Provides default models for each provider
+- Handles proxy configuration
+- Creates OpenAI-compatible clients
 
 ### `agent/server.py`
 
 The local MCP server. It defines and executes the tools exposed to the agent:
 
-- `read_file`: reads text from a local file, including extractable text from PDFs.
-- `write_file`: writes text to a local file.
-- `web_search`: performs a simple web search through DuckDuckGo HTML results.
-- `index_document`: reads a text or PDF file, splits it into chunks, and stores it in ChromaDB.
-- `search_knowledge_base`: searches indexed document chunks by semantic similarity.
+- `read_file`: reads text from a local file, including extractable text from PDFs
+- `write_file`: writes text to a local file
+- `web_search`: performs a simple web search through DuckDuckGo HTML results
+- `index_document`: reads a text or PDF file, splits it into chunks, and stores it in ChromaDB
+- `search_knowledge_base`: searches indexed document chunks by semantic similarity
+- `read_skill`: loads a markdown skill file for execution
+- `list_skills`: lists all available skills
 
-The ChromaDB collection and sentence-transformer embedding model are initialized lazily, so normal MCP startup does not depend on model download availability.
+### `app/app.py`
 
+The Gradio web interface. It:
 
+- Provides a web-based chat UI
+- Supports multiple model provider selection
+- Shows real-time tool calls and responses in the terminal
+- Displays markdown-formatted responses
+- Manages conversation history
 
-## Common Commands
+### Skills
 
-Activate the virtual environment:
+Skills are markdown files that define reusable workflows:
 
-```powershell
-.\venv\Scripts\Activate.ps1
-```
+- `analyze-research-paper.md`: Step-by-step research paper analysis workflow
+- `code-review.md`: Code review and improvement suggestions workflow
 
-Run the agent:
+Skills are loaded dynamically and executed when requested by the model.
 
-```powershell
-python agent\agent.py
-```
-
-Run the MCP server directly for debugging:
-
-```powershell
-python agent\server.py
-```
 
 ## Notes
+
 - The MCP server communicates over stdio, so protocol messages must stay on stdout. Debug logs should go to stderr.
 - If RAG tools fail on first use, check whether the sentence-transformer model can be downloaded or is already cached locally.
+- The web UI logs tool calls and responses to the terminal for monitoring.
+- ChromaDB and the sentence-transformer embedding model are initialized lazily, so normal MCP startup does not depend on model download availability.
